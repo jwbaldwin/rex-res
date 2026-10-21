@@ -33,8 +33,8 @@ def api(method, **args):
     return json.loads(cli("api", "call", method, json.dumps(args)).stdout)
 
 
-def action(name):
-    return json.loads(cli("do", name, "--json").stdout)
+def action(name, origin="cli"):
+    return json.loads(cli("do", name, "--origin", origin, "--json").stdout)
 
 
 def wait_for(predicate):
@@ -101,7 +101,19 @@ def shape(node):
 
 
 def run():
-    CONFIG.write_text(f"dofile({json.dumps(str(PLUGIN))}).setup {{ state_dir = {json.dumps(str(STATE))}, programs = {{ 'sleep' }} }}\n")
+    notification_fixture = """
+local execute = rex.exec
+local notifications = {}
+rex.exec = function(argv, options)
+  if argv[1] == "/usr/bin/osascript" then
+    notifications[#notifications + 1] = { title = argv[4], message = argv[5] }
+    return { ok = true, stdout = "", stderr = "" }
+  end
+  return execute(argv, options)
+end
+rex.action { name = "test_notifications", title = "Test Notifications", run = function() return notifications end }
+"""
+    CONFIG.write_text(notification_fixture + f"dofile({json.dumps(str(PLUGIN))}).setup {{ state_dir = {json.dumps(str(STATE))}, programs = {{ 'sleep' }} }}\n")
     process = start(1)
     try:
         probe = api("session.create", label="initial-input", initial_windows=[{
@@ -130,7 +142,9 @@ def run():
         api("session.set_block_label", session_id=session, block_id=window["block_ids"][2], label="log viewer")
         api("session.zoom_block", session_id=session, block_id=window["block_ids"][1], zoom=True)
         original = api("session.view", session_id=session)
-        assert "2 sessions and 5 panes" in action("res_save")
+        saved_message = action("res_save", origin="palette")
+        assert "2 sessions and 5 panes" in saved_message
+        assert action("test_notifications") == [{"title": "Rex Resurrect", "message": saved_message}]
         assert stat.S_IMODE(STATE.stat().st_mode) == 0o700
         assert stat.S_IMODE(SNAPSHOT.stat().st_mode) == 0o600
         saved = SNAPSHOT.read_bytes()
@@ -152,10 +166,14 @@ def run():
         assert all(pane["cwd"] == str(ROOT) for pane in panes), panes
         pids = [terminal(session, b)["foreground"]["pid"] for b in window["block_ids"]]
         assert "Created 0 panes" in action("res_restore")
+        assert len(action("test_notifications")) == 1
+        restored_message = action("res_restore", origin="palette")
+        assert action("test_notifications")[-1]["message"] == restored_message
         assert pids == [terminal(session, b)["foreground"]["pid"] for b in window["block_ids"]]
 
         duplicate = api("session.create", label="one")
-        assert cli("do", "res_save", check=False).returncode != 0
+        assert cli("do", "res_save", "--origin", "palette", check=False).returncode != 0
+        assert len(action("test_notifications")) == 2
         assert SNAPSHOT.read_bytes() == saved
         api("session.destroy", session_id=duplicate["session_id"])
         cli("server", "stop")
@@ -196,7 +214,7 @@ def run():
         SNAPSHOT.write_bytes(saved)
         assert "2 sessions and 5 panes" in action("res_status")
 
-        CONFIG.write_text(f"dofile({json.dumps(str(PLUGIN))}).setup {{ state_dir = {json.dumps(str(STATE))}, programs = {{}} }}\n")
+        CONFIG.write_text(notification_fixture + f"dofile({json.dumps(str(PLUGIN))}).setup {{ state_dir = {json.dumps(str(STATE))}, programs = {{}} }}\n")
         api("server.config_reload")
         api("session.destroy", session_id=session)
         assert "Created 4 panes; replayed 0 commands; skipped 3" in action("res_restore")
@@ -207,6 +225,8 @@ def run():
             api("session.destroy", session_id=entry["session_id"])
         assert "0 sessions and 0 panes" in action("res_save")
         assert "Created 0 panes" in action("res_restore")
+        status_message = action("res_status", origin="key")
+        assert action("test_notifications")[-1]["message"] == status_message
         print(f"Lua integration passed: {ROOT}")
     finally:
         try:

@@ -264,12 +264,22 @@ function plugin.setup(options)
     return snapshot
   end
   local function action(name, title, run)
-    rex.action { name = name, title = title, category = "Rex Resurrect", run = function()
+    rex.action { name = name, title = title, category = "Rex Resurrect", run = function(ctx)
       assert(not busy, "Another rex-res action is running")
       busy = true
       local ok, result = pcall(run)
       busy = false
       if not ok then error(result, 0) end
+      if ctx.origin == "palette" or ctx.origin == "key" then
+        local notification, err = rex.exec({ "/usr/bin/osascript", "-e", [[
+on run argv
+  display notification (item 2 of argv) with title (item 1 of argv)
+end run
+]], "Rex Resurrect", result }, { timeout = 5 })
+        if not notification or not notification.ok then
+          rex.log("warn", "Workspace action completed, but notification failed: " .. (err or notification.stderr))
+        end
+      end
       return result
     end }
   end

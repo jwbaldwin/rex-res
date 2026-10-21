@@ -20,7 +20,7 @@ Requires Rex on macOS, `ps`, `lsof`, and `/bin/sh`
 
 Run **Save Rex Workspace** before quitting or updating Rex
 Run **Restore Rex Workspace** afterward, from the command palette
-**Saved Rex Workspace Status** shows the last save
+Palette actions send macOS notifications; **Saved Rex Workspace Status** shows the last save
 Nothing saves, restores, or restarts automatically
 
 The plugin saves layouts, directories, labels, focus, zoom, and command lines

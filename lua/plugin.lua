@@ -4,6 +4,10 @@ local defaults = { "vi", "vim", "nvim", "emacs", "man", "less", "more", "tail", 
 local shells = { sh = true, bash = true, zsh = true, fish = true, dash = true, ksh = true, nu = true, login = true }
 local configured = false
 
+local function saved_time(timestamp)
+  return os.date("%b %d, %Y at %I:%M %p", timestamp):gsub(" 0", " ")
+end
+
 local function call(method, args)
   return assert(rex.call(method, args))
 end
@@ -231,7 +235,10 @@ local function restore(snapshot, allowed)
       call("session.focus_window", { session_id = session_id, window_id = new_windows[saved.active_window] })
     end
   end
-  return string.format("Created %d panes; replayed %d commands; skipped %d unapproved commands", created, replayed, skipped)
+  return {
+    summary = string.format("Restore complete · Created %d panes", created),
+    detail = string.format("Replayed %d commands · Skipped %d unapproved commands", replayed, skipped),
+  }
 end
 
 function plugin.setup(options)
@@ -267,20 +274,20 @@ function plugin.setup(options)
     rex.action { name = name, title = title, category = "Rex Resurrect", run = function(ctx)
       assert(not busy, "Another rex-res action is running")
       busy = true
-      local ok, result = pcall(run)
+      local ok, report = pcall(run)
       busy = false
-      if not ok then error(result, 0) end
+      if not ok then error(report, 0) end
       if ctx.origin == "palette" or ctx.origin == "key" then
         local notification, err = rex.exec({ "/usr/bin/osascript", "-e", [[
 on run argv
-  display notification (item 2 of argv) with title (item 1 of argv)
+  display notification (item 3 of argv) with title (item 1 of argv) subtitle (item 2 of argv)
 end run
-]], "Rex Resurrect", result }, { timeout = 5 })
+]], "Rex Resurrect", report.summary, report.detail }, { timeout = 5 })
         if not notification or not notification.ok then
           rex.log("warn", "Workspace action completed, but notification failed: " .. (err or notification.stderr))
         end
       end
-      return result
+      return report.summary .. "\n" .. report.detail .. (report.path and "\nSnapshot: " .. report.path or "")
     end }
   end
   action("res_save", "Save Rex Workspace", function()
@@ -298,7 +305,11 @@ trap 'rm -f "$tmp"' EXIT HUP INT TERM
 cat > "$tmp"
 mv -f "$tmp" "$1/workspace.json"
 ]], "rex-res", state_dir }, { stdin = encoded, timeout = 10 })
-    return string.format("Saved %d sessions and %d panes to %s", #snapshot.sessions, count, path)
+    return {
+      summary = string.format("Saved %d sessions · %d panes", #snapshot.sessions, count),
+      detail = saved_time(snapshot.saved_at),
+      path = path,
+    }
   end)
   action("res_restore", "Restore Rex Workspace", function() return restore(read(), allowed) end)
   action("res_status", "Saved Rex Workspace Status", function()
@@ -309,7 +320,11 @@ mv -f "$tmp" "$1/workspace.json"
         for _, layer in ipairs(window.layers) do count = count + #leaves(layer.layout) end
       end
     end
-    return string.format("%d sessions and %d panes saved %s in %s", #snapshot.sessions, count, os.date("%Y-%m-%d %H:%M:%S", snapshot.saved_at), path)
+    return {
+      summary = string.format("%d sessions · %d panes", #snapshot.sessions, count),
+      detail = "Saved " .. saved_time(snapshot.saved_at),
+      path = path,
+    }
   end)
   if prefix then
     rex.bind(prefix .. ">ctrl+s", "res_save")

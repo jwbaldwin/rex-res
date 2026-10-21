@@ -1,6 +1,7 @@
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import stat
 import subprocess
@@ -106,7 +107,7 @@ local execute = rex.exec
 local notifications = {}
 rex.exec = function(argv, options)
   if argv[1] == "/usr/bin/osascript" then
-    notifications[#notifications + 1] = { title = argv[4], message = argv[5] }
+    notifications[#notifications + 1] = { title = argv[4], subtitle = argv[5], message = argv[6] }
     return { ok = true, stdout = "", stderr = "" }
   end
   return execute(argv, options)
@@ -143,8 +144,11 @@ rex.action { name = "test_notifications", title = "Test Notifications", run = fu
         api("session.zoom_block", session_id=session, block_id=window["block_ids"][1], zoom=True)
         original = api("session.view", session_id=session)
         saved_message = action("res_save", origin="palette")
-        assert "2 sessions and 5 panes" in saved_message
-        assert action("test_notifications") == [{"title": "Rex Resurrect", "message": saved_message}]
+        saved_notice = action("test_notifications")[0]
+        assert saved_notice["title"] == "Rex Resurrect"
+        assert "2 sessions" in saved_notice["subtitle"] and "5 panes" in saved_notice["subtitle"]
+        assert re.fullmatch(r"[A-Za-z]+ \d{1,2}, \d{4} at \d{1,2}:\d{2} [AP]M", saved_notice["message"])
+        assert str(SNAPSHOT) in saved_message and str(SNAPSHOT) not in saved_notice["message"]
         assert stat.S_IMODE(STATE.stat().st_mode) == 0o700
         assert stat.S_IMODE(SNAPSHOT.stat().st_mode) == 0o600
         saved = SNAPSHOT.read_bytes()
@@ -168,7 +172,8 @@ rex.action { name = "test_notifications", title = "Test Notifications", run = fu
         assert "Created 0 panes" in action("res_restore")
         assert len(action("test_notifications")) == 1
         restored_message = action("res_restore", origin="palette")
-        assert action("test_notifications")[-1]["message"] == restored_message
+        restored_notice = action("test_notifications")[-1]
+        assert restored_message == restored_notice["subtitle"] + "\n" + restored_notice["message"]
         assert pids == [terminal(session, b)["foreground"]["pid"] for b in window["block_ids"]]
 
         duplicate = api("session.create", label="one")
@@ -179,7 +184,8 @@ rex.action { name = "test_notifications", title = "Test Notifications", run = fu
         cli("server", "stop")
         process.wait(timeout=10)
         process = start(2)
-        assert "Created 5 panes; replayed 2 commands; skipped 1" in action("res_restore")
+        restored_message = action("res_restore")
+        assert "Created 5 panes" in restored_message and "Replayed 2 commands" in restored_message and "Skipped 1" in restored_message
         listed = api("session.list")["sessions"]
         assert [s["label"] for s in listed] == ["one", "two"]
         session = listed[0]["session_id"]
@@ -212,21 +218,26 @@ rex.action { name = "test_notifications", title = "Test Notifications", run = fu
         assert cli("do", "res_restore", check=False).returncode != 0
         assert len(api("session.list")["sessions"]) == count
         SNAPSHOT.write_bytes(saved)
-        assert "2 sessions and 5 panes" in action("res_status")
+        status_message = action("res_status")
+        assert "2 sessions" in status_message and "5 panes" in status_message
 
         CONFIG.write_text(notification_fixture + f"dofile({json.dumps(str(PLUGIN))}).setup {{ state_dir = {json.dumps(str(STATE))}, programs = {{}} }}\n")
         api("server.config_reload")
         api("session.destroy", session_id=session)
-        assert "Created 4 panes; replayed 0 commands; skipped 3" in action("res_restore")
+        restored_message = action("res_restore")
+        assert "Created 4 panes" in restored_message and "Replayed 0 commands" in restored_message and "Skipped 3" in restored_message
         recreated = next(s for s in api("session.list")["sessions"] if s["label"] == "one")
         for block in blocks(api("session.view", session_id=recreated["session_id"])):
             wait_for(lambda: foreground(recreated["session_id"], block["block_id"], "zsh"))
         for entry in api("session.list")["sessions"]:
             api("session.destroy", session_id=entry["session_id"])
-        assert "0 sessions and 0 panes" in action("res_save")
+        saved_message = action("res_save")
+        assert "0 sessions" in saved_message and "0 panes" in saved_message
         assert "Created 0 panes" in action("res_restore")
         status_message = action("res_status", origin="key")
-        assert action("test_notifications")[-1]["message"] == status_message
+        status_notice = action("test_notifications")[-1]
+        assert status_notice["message"].startswith("Saved ")
+        assert status_message == status_notice["subtitle"] + "\n" + status_notice["message"] + "\nSnapshot: " + str(SNAPSHOT)
         print(f"Lua integration passed: {ROOT}")
     finally:
         try:

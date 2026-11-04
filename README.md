@@ -1,11 +1,15 @@
 # rex-res
 
-Save and restore a Rex workspace, modeled on tmux-resurrect
-One Lua plugin, no helper or background service
+Bring back the programs that were running in your Rex panes after Rex restarts.
+
+Rex already saves sessions, tabs, splits, floating panes, labels, and working
+directories, and restores them when its server starts. It brings each terminal
+back as a plain shell. rex-res remembers what ran in each pane and types it
+back into the same pane.
 
 ## Setup
 
-Clone this repo, then load it from `~/.config/rex/init.lua`:
+Load it from `~/.config/rex/init.lua` and run `rex config reload`:
 
 ```lua
 dofile(os.getenv("HOME") .. "/repos/projects/rex-res/lua/plugin.lua").setup({
@@ -13,37 +17,42 @@ dofile(os.getenv("HOME") .. "/repos/projects/rex-res/lua/plugin.lua").setup({
 })
 ```
 
-Adjust the path to your clone and run `rex config reload`
-Requires Rex on macOS, `ps`, `lsof`, and `/bin/sh`
+Options:
+
+- `programs`: executable names to save. Defaults to `pi nvim opencode htop btop`.
+- `prefix`: a key that, followed by Ctrl+S or Ctrl+R, saves or restores. Defaults to `ctrl+b`; `false` turns it off.
+- `state_dir`: where the snapshot goes. Defaults to `$REX_RES_STATE` or `~/.local/state/rex-res`.
 
 ## Use
 
-Run **Save Rex Workspace** before quitting or updating Rex
-Run **Restore Rex Workspace** afterward, from the command palette
-Palette actions send macOS notifications; **Saved Rex Workspace Status** shows the last save
-Nothing saves, restores, or restarts automatically
+From the command palette:
 
-The plugin saves layouts, directories, labels, focus, zoom, and command lines
-Restore creates missing sessions, tabs, and panes, leaving existing programs alone
-Sessions match by unique label; tabs, layers, and panes match by position
-Save again after reordering your layout
+- **rex-res: Save running programs** before you quit, update, or restart Rex.
+- **rex-res: Restore running programs** after Rex comes back.
+- **rex-res: Show saved programs** shows what's saved and whether it's waiting to restore.
 
-Snapshots go to `~/.local/state/rex-res/workspace.json`, mode 0600
-Saves replace the file atomically; failed saves keep the previous snapshot
-Set `state_dir` or `REX_RES_STATE` to use another directory, one per Rex server
+Save records, for every terminal running a listed program, its block ID,
+working directory, and command line. Restore finds each saved block. If that
+pane is sitting at a shell prompt, it types the command, after a `cd` when the
+shell is in another directory. It leaves busy panes alone and skips panes that
+no longer exist, so running it twice is harmless.
 
-Only approved programs run in new panes; other panes open plain shells
-Defaults: `vi vim nvim emacs man less more tail top htop irssi weechat mutt opencode`
-Set `programs = { "nvim", "opencode" }` to replace that list; `{}` disables replay
-Set `prefix = "ctrl+b"` for prefix + Ctrl+S/Ctrl+R shortcuts
+After a restart, Save refuses to overwrite a snapshot that hasn't been restored,
+so an early save can't wipe out the commands you meant to bring back. Run
+`rex do res_save force=true` to replace it anyway.
 
-`ps` loses argument quoting and shell context, so command replay is best-effort
-OpenCode reopens a conversation only when its saved command names that session
-Memory, scrollback, and conversation switches inside OpenCode are not saved
-Snapshots may contain secrets in arguments; restore only trusted files
-The approved list is not a sandbox: the shell interprets the full command
+## Limits
+
+- Rex must restore the sessions itself. Panes are matched by block ID, so a
+  server started with `--restore=false` gets nothing back.
+- Rex never reports a program's arguments, so rex-res reads them from `ps`.
+  Quoting is lost, and a program that rewrites its process title, like `pi`,
+  saves only its name. `pi` starts a new conversation.
+- Snapshots can hold secrets passed as arguments. The directory is mode 0700.
+- Nothing saves or restores automatically. Rex doesn't send events to
+  `init.lua`, so that would need a separate long-running `rex do` script.
 
 ## Development
 
-Run `python3 tests/integration.py` with Rex installed
-Tests use isolated servers and remove their temporary files on exit
+Run `python3 tests/integration.py` with Rex installed. It starts isolated
+servers, restarts one to check the real restore path, and removes its files.
